@@ -1,7 +1,7 @@
 # HuHoBot 机器人客户端
 
 [![Python Version](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/)
-[![License](https://img.shields.io/badge/license-GPLv3-green.svg)](https://opensource.org/licenses/GPL-3)
+[![License](https://img.shields.io/badge/license-GPL3.0-green.svg)](https://opensource.org/licenses/GPL-3.0)
 
 基于QQ官方Bot框架的Minecraft服务管理机器人，实现WebSocket协议的双向通信桥梁。
 
@@ -46,7 +46,7 @@ graph TD
 ### 安装运行
 ```bash
 # 克隆仓库
-git clone https://github.com/HuHoBot/BotClient.git
+git clone https://github.com/HuHoBot/Bot.git
 
 # 安装依赖
 pip install -r requirements.txt
@@ -71,5 +71,5 @@ AUDIT=True
 - 请求超时自动清理
 
 ## License
-GPL-v3 License © 2025 HuHoBot
+GPL-3.0 License © 2025 HuHoBot
 
