@@ -1,0 +1,7 @@
+aiofiles==24.1.0
+qq_botpy==1.2.1
+websockets==12.0
+
+aiosqlite~=0.20.0
+requests~=2.28.1
+colorama~=0.4.6
