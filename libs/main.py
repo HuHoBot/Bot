@@ -269,30 +269,47 @@ async def queryOnline(api: BotAPI, message: GroupMessage, params=None):
     async def onlineReply(data: dict):
         #获取data内消息
         msg = data['msg']
-        url = data['url']
-        serverType = data.get('serverType',"bedrock")
 
-        if(serverType == 'java'):
-            reqUrl = f'https://motdbe.blackbe.work/status_img/java?host={url}'
+        #检测是否有imgUrl，若有则优先使用
+        if (data.get('imgUrl') is not None) and (data.get('imgUrl') != "") :
+            if data.get('post_img',False):
+                uploadMedia = await api.post_group_file(message.group_openid,1,data['imgUrl'],False)
+                await api.post_group_message(
+                    group_openid=message.group_openid,
+                    msg_type=7,
+                    msg_id=message.id,
+                    content=f'{msg}',
+                    media=uploadMedia
+                )
+            else:
+                await message.reply(content=f"{msg}")
+            return
         else:
-            reqUrl = f"https://motdbe.blackbe.work/status_img?host={url}"
+            url = data.get("url","")
+            serverType = data.get('serverType',"bedrock")
 
-        preTip = ""
-        if("easecation" in url) or ("hypixel" in url):
-            preTip = "(若发现查询出来的图片不是本服务器，请先修改config中的motdUrl字段)\n"
+            if serverType == 'java':
+                reqUrl = f'https://motdbe.blackbe.work/status_img/java?host={url}'
+            else:
+                reqUrl = f"https://motdbe.blackbe.work/status_img?host={url}"
 
-        rpMsg = msg.replace("\u200b","\n")
-        if url != "" and is_valid_domain_port(url):
-            uploadMedia = await api.post_group_file(message.group_openid,1,reqUrl,False)
-            await api.post_group_message(
-                group_openid=message.group_openid,
-                msg_type=7,
-                msg_id=message.id, 
-                content=f'{preTip}在线玩家列表:\n{rpMsg}',
-                media=uploadMedia
-            )
-        else:
-            await message.reply(content=f"{preTip}在线玩家列表:\n{rpMsg}")
+            preTip = ""
+            if("easecation" in url) or ("hypixel" in url):
+                preTip = "(若发现查询出来的图片不是本服务器，请先修改config中的motdUrl字段)\n"
+
+            rpMsg = msg.replace("\u200b","\n")
+            if url != "" and is_valid_domain_port(url):
+                uploadMedia = await api.post_group_file(message.group_openid,1,reqUrl,False)
+                await api.post_group_message(
+                    group_openid=message.group_openid,
+                    msg_type=7,
+                    msg_id=message.id,
+                    content=f'{preTip}在线玩家列表:\n{rpMsg}',
+                    media=uploadMedia
+                )
+            else:
+                await message.reply(content=f"{preTip}在线玩家列表:\n{rpMsg}")
+
     server_instance.addCallbackFunc(unique_id,onlineReply)
     return True
 

@@ -165,7 +165,7 @@ class WebsocketClient:
     async def send_heartbeat(self):
         while True:
             await asyncio.sleep(5)
-            if self.ws is not None and self.ws.open:
+            if self.ws is not None:
                 try:
                     await self._sendMsg("heart", {})
                 except websockets.exceptions.ConnectionClosed:
