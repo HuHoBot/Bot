@@ -329,6 +329,7 @@ async def queryOnline(api: BotAPI, message: GroupMessage, params=None):
             else:
                 await message.reply(content=f"{preTip}在线玩家列表:\n{rpMsg}")
 
+
     server_instance.addCallbackFunc(unique_id,onlineReply)
     return True
 
