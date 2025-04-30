@@ -83,12 +83,26 @@ async def reCall(api: BotAPI, message: GroupMessage, params=None):
 
 @Commands("绑定")
 async def bind(api: BotAPI, message: GroupMessage, params=None):
+    paramsList = splitCommandParams(params)
+    if len(paramsList) < 1 or len(paramsList) > 2:  # 参数数量校验
+        await message.reply(content="参数不正确，格式应为：/命令 <serverId> [多群]")
+        return True
+
+    # 判断是否包含多群参数
+    isMoreGroup = False
+    if len(paramsList) == 2:
+        if paramsList[1] != "多群":  # 严格校验第二个参数
+            await message.reply(content="第二个参数只能是「多群」")
+            return True
+        isMoreGroup = True
+    serverId = paramsList[0]
+
     #查询是否已经绑定过
     bindRet = await queryBindServerByGroup(message.group_openid)
-    if(bindRet != None):
+    if bindRet is not None:
         #查询是否是管理员
         adminRet = await queryIsAdmin(message.group_openid,message.author.member_openid)
-        if(not adminRet):
+        if not adminRet:
             await message.reply(content="你没有足够的权限.")
             return True
     
@@ -98,23 +112,24 @@ async def bind(api: BotAPI, message: GroupMessage, params=None):
     server_instance = serverManager.getWsServer()
     server_instance.addCallbackFunc(unique_id,Reply)
 
-    if(isGuid(params)):
+    if isGuid(serverId):
         #发送bindRequest请求
         bindCode = generate_randomCode()
         bindReq_Data = {"bindCode":bindCode}
-        bindReq_Ret = await server_instance.sendMsgByServerId(params,websocketEvent.bindRequest,bindReq_Data,unique_id)
+        bindReq_Ret = await server_instance.sendMsgByServerId(serverId,websocketEvent.bindRequest,bindReq_Data,unique_id)
         if(bindReq_Ret):
             #存储到temp中
             bindServerTemp[unique_id] = {
-                "serverId":params,
+                "serverId":serverId,
                 "groupId":message.group_openid,
-                "author":message.author.member_openid
+                "author":message.author.member_openid,
+                "isMoreGroup":isMoreGroup,
             }
             await message.reply(content=f"已向服务端下发绑定请求，本次绑定校验码为:{bindCode}，请查看服务端控制台出现的信息。")
         else:
-            await message.reply(content=f"无法向Id为{params}的服务器下发绑定请求，请管理员检查连接状态")
+            await message.reply(content=f"无法向Id为{serverId}的服务器下发绑定请求，请管理员检查连接状态")
     else:
-        await message.reply(content=f"{params}不是一个合法的绑定Key，请重新确认（绑定Key应为32个字符长度的十六进制字符串）")
+        await message.reply(content=f"{serverId}不是一个合法的绑定Key，请重新确认（绑定Key应为32个字符长度的十六进制字符串）")
     return True
 
 @Commands("管理帮助")
@@ -269,20 +284,25 @@ async def queryOnline(api: BotAPI, message: GroupMessage, params=None):
     async def onlineReply(data: dict):
         #获取data内消息
         msg = data['msg']
+        rpMsg = msg.replace("\u200b","\n")
 
         #检测是否有imgUrl，若有则优先使用
         if (data.get('imgUrl') is not None) and (data.get('imgUrl') != "") :
             if data.get('post_img',False):
+                url = data.get("url", "")
+                preTip = ""
+                if ("easecation" in url) or ("hypixel" in url):
+                    preTip = "(若发现查询出来的图片不是本服务器，请先修改config中的motd字段，或修改post_img使其不推送图片)\n"
                 uploadMedia = await api.post_group_file(message.group_openid,1,data['imgUrl'],False)
                 await api.post_group_message(
                     group_openid=message.group_openid,
                     msg_type=7,
                     msg_id=message.id,
-                    content=f'{msg}',
+                    content=f'{preTip}{rpMsg}',
                     media=uploadMedia
                 )
             else:
-                await message.reply(content=f"{msg}")
+                await message.reply(content=f'{rpMsg}')
             return
         else:
             url = data.get("url","")
@@ -297,7 +317,6 @@ async def queryOnline(api: BotAPI, message: GroupMessage, params=None):
             if("easecation" in url) or ("hypixel" in url):
                 preTip = "(若发现查询出来的图片不是本服务器，请先修改config中的motdUrl字段)\n"
 
-            rpMsg = msg.replace("\u200b","\n")
             if url != "" and is_valid_domain_port(url):
                 uploadMedia = await api.post_group_file(message.group_openid,1,reqUrl,False)
                 await api.post_group_message(
