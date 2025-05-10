@@ -1,15 +1,20 @@
 # -*- coding: utf-8 -*-
 import botpy
-from botpy import logging, BotAPI
-from botpy.ext.command_util import Commands
-from botpy.message import GroupMessage,MessageAudit,Message
-from botpy.types.message import MarkdownPayload, KeyboardPayload
-from botpy.types.inline import Keyboard, Button, RenderData, Action, Permission, KeyboardRow
 import asyncio
 import websockets
 import uuid
 
+import ymbotpy
+from ymbotpy.interaction import Interaction
+from ymbotpy.manage import GroupManageEvent
+from ymbotpy.message import Message,GroupMessage,MessageAudit
+from ymbotpy.types.message import Keyboard, KeyboardPayload, MarkdownPayload
+from ymbotpy.ext.command_util import *
+from ymbotpy import logging, WebHookClient, Client
+from decimal import Decimal, getcontext
+
 from libs.basic import *
+from libs.switchAvatars import *
 from libs.websocketClient import *
 
 _log = logging.get_logger()    #Botpy Logger
@@ -129,7 +134,7 @@ async def bind(api: BotAPI, message: GroupMessage, params=None):
         else:
             await message.reply(content=f"无法向Id为{serverId}的服务器下发绑定请求，请管理员检查连接状态")
     else:
-        await message.reply(content=f"{serverId}不是一个合法的绑定Key，请重新确认（绑定Key应为32个字符长度的十六进制字符串）")
+        await message.reply(content=f"你发送的内容不是一个合法的绑定Key，请重新确认（绑定Key应为32个字符长度的十六进制字符串）")
     return True
 
 @Commands("管理帮助")
@@ -206,10 +211,19 @@ async def sendGameMsg(api: BotAPI, message: GroupMessage, params=None):
         if(ret is None):
             await message.reply(content=f"您还未绑定服务器，请按说明进行绑定.")
             return True
+        serverId = ret[1]
+
+        unique_id = str(uuid.uuid4())
+
+        #存储至ChatTemp
+        chatManager.postBotApi(api)
+        chatManager.saveTemp(serverId,message.group_openid,message.id,1)
+
         server_instance = serverManager.getWsServer()
-        wsRet = await server_instance.sendMsgByServerId(ret[1],websocketEvent.sendChat,{"msg":params,"nick":nick})
+        wsRet = await server_instance.sendMsgByServerId(serverId,websocketEvent.sendChat,{"msg":params,"nick":nick},unique_id) #发信息
+
         if(not wsRet):
-            await message.reply(content=f"无法向Id为{ret[1]}的服务器发送请求，请管理员检查连接状态")
+            await message.reply(content=f"无法向Id为{serverId}的服务器发送请求，请管理员检查连接状态")
             
     return True
 
@@ -349,6 +363,7 @@ async def queryClientList(api: BotAPI, message: GroupMessage, params=None):
 
 async def customRun(isAdmin: bool,api: BotAPI, message: GroupMessage,params=None):
     paramsList = splitCommandParams(params)
+
     if len(paramsList) < 1:
         await message.reply(content="参数不正确")
         return True
@@ -396,6 +411,9 @@ async def customRun(isAdmin: bool,api: BotAPI, message: GroupMessage,params=None
         "groupId": message.group_openid,
         "author": message.author.member_openid,
     })
+
+    bindQQ = await queryBindQQ(message.group_openid,message.author.member_openid)
+
     wsRet = await server_instance.sendMsgByServerId(
         ret[1],
         sendEvent,
@@ -406,6 +424,7 @@ async def customRun(isAdmin: bool,api: BotAPI, message: GroupMessage,params=None
                 "qlogoUrl":getQLogoUrl(message.author.member_openid),
                 "bindNick":nick,
                 "openId":message.author.member_openid,
+                "bindQQ":bindQQ
             },
             "group":{
                 "openId":message.group_openid,
@@ -438,6 +457,12 @@ async def runCommand(api: BotAPI, message: GroupMessage, params=None):
 
 @Commands("motd")
 async def motd(api: BotAPI, message: GroupMessage, params=None):
+    adminRet = await queryIsAdmin(message.group_openid, message.author.member_openid)
+    motdRet = await queryIsBlockMotd(message.group_openid)
+    if (not adminRet) and motdRet:
+        await message.reply(content="本群已屏蔽Motd")
+        return True
+
     paramsList = splitCommandParams(params)
     url=""
     platform="auto"
@@ -452,7 +477,7 @@ async def motd(api: BotAPI, message: GroupMessage, params=None):
         return True
     
     motd = Motd(url)
-    if(not motd.is_valid()):
+    if not motd.is_valid():
         await message.reply(content=f"服务器地址参数不正确")
         return True
     
@@ -465,7 +490,7 @@ async def motd(api: BotAPI, message: GroupMessage, params=None):
                 '3.指定的平台错误(je,be,auto)(不填默认auto)\n'
                 '4.ip或端口输入错误，或者接口维护这个可以问问机器人主人😝')
     
-    if(motdData.get('online')):
+    if motdData.get('online'):
         try:
             uploadMedia = await api.post_group_file(message.group_openid,1,motdData.get("imgUrl"),False)
             await api.post_group_message(
@@ -478,13 +503,123 @@ async def motd(api: BotAPI, message: GroupMessage, params=None):
         except Exception as e:
             _log.error(f"Error sending MOTD data: {e}")
             await message.reply(content=failedText)
+
     else:
         await message.reply(content=failedText)
-    
 
+@Commands("unblockMotd")
+async def unblockMotd(api: BotAPI, message: GroupMessage, params=None):
+    adminRet = await queryIsAdmin(message.group_openid, message.author.member_openid)
+    if not adminRet:
+        await message.reply(content="你没有足够的权限.")
+        return True
+    ret = await delBlockMotd(message.group_openid)
+    if ret:
+        await message.reply(content=f"本群已设置为:解除屏蔽Motd.")
+    return True
+
+@Commands("blockMotd")
+async def blockMotd(api: BotAPI, message: GroupMessage, params=None):
+    adminRet = await queryIsAdmin(message.group_openid, message.author.member_openid)
+    if not adminRet:
+        await message.reply(content="你没有足够的权限.")
+        return True
+    ret = await addBlockMotd(message.group_openid)
+    if ret:
+        await message.reply(content=f"本群已设置为:屏蔽Motd.")
+    return True
+
+@Commands("解除认证")
+async def unauthQQAvatar(api: BotAPI, message: GroupMessage, params=None):
+    targetOpenId = params
+    adminRet = await queryIsAdmin(message.group_openid, message.author.member_openid)
+    if not adminRet:
+        await message.reply(content="你没有足够的权限.")
+        return True
+
+    if targetOpenId != "":
+        ret = await delBindQQById(message.group_openid,targetOpenId)
+        if ret:
+            await message.reply(content=f"✅ 解除认证成功！已为{targetOpenId}解除绑定QQ账号")
+        else:
+            await message.reply(content=f"❌ 解除认证失败！请检查输入的OpenId是否正确")
+    else:
+        await message.reply(content=f"请输入要解除认证的OpenId")
+
+
+    return True
+
+@Commands("认证")
+async def authQQAvatar(api: BotAPI, message: GroupMessage, params=None):
+    openId = message.author.member_openid
+    paramList = splitCommandParams(params)
+    if len(paramList) == 0:
+        ret = await queryBindQQ(message.group_openid, openId)
+
+        if ret is not None:
+            await message.reply(content=f'您已绑定QQ:{ret}\n如需解除请联系机器人管理员使用"/解除认证 {openId}"以解除认证')
+        else:
+            await message.reply(content=f'您暂未绑定QQ，请使用"/认证 <qq号>"进行绑定，例如"/认证 123456789"')
+
+        return True
+    elif len(paramList) == 1:
+        qqNum = paramList[0]
+        if is_valid_QQ(params):
+            #检测是否绑定过
+            ret = await queryBindQQ(message.group_openid, openId)
+            if ret is not None:
+                await message.reply(content=f"您已绑定QQ:{ret}")
+                return True
+
+            result = compare_qq_avatars(params, openId)
+            if result[1] == 0:
+                getcontext().prec = 6
+                threshold = Decimal('0.9995')
+                similarity = Decimal(str(result[0]))
+
+                # 新增百分比转换逻辑
+                similarity_percent = similarity * 100  # 转换为百分数
+                epsilon = Decimal('0.00001')
+
+                if abs(similarity - threshold) < epsilon or similarity > threshold:
+                    # 显示两位小数（99.99% 格式）
+                    await message.reply(content=f'✅ 认证通过！绑定信息如下\nOpenId:{openId}\nQQ账号:{qqNum}\n如绑定有误，请管理员输入"/解除认证 {openId}"')
+                    await addBindQQ(message.group_openid, openId, qqNum)
+                else:
+                    # 显示两位小数，并添加阈值提示
+                    await message.reply(
+                        content=f'❌ 认证失败，当前匹配度：{similarity_percent:.2f}%（需≥{threshold * 100:.2f}%）\n管理员可手动使用"/认证 {qqNum} {openId}"进行人工确认'
+                    )
+            else:
+                await message.reply(content=f'图像比对失败: 错误 ({result[1]}): {result[2]}\n管理员可手动使用"/认证 {qqNum} {openId}"进行人工确认')
+        else:
+            await message.reply(content=f"认证失败，请检查输入的QQ号是否正确")
+    elif len(paramList) > 1:
+        adminRet = await queryIsAdmin(message.group_openid, message.author.member_openid)
+        if not adminRet:
+            await message.reply(content="你没有足够的权限.")
+            return True
+        qqNum = paramList[0]
+        targetOpenId = paramList[1]
+
+        await message.reply(content=f"✅ 认证通过！已为{openId}绑定为QQ账号:{qqNum}")
+        await addBindQQ(message.group_openid, targetOpenId, qqNum)
+
+        #await message.reply(msg_type=2,markdown={},keyboard=KeyboardPayload(id="xxx"),msg_seq=2)
+
+    return True
 
 #BotPy主框架
-class BotClient(botpy.Client): 
+class BaseBotMixin:
+    @property
+    def bot_api(self):
+        """统一获取API实例的接口"""
+        if isinstance(self, WebHookClient):
+            return self.api
+        elif isinstance(self, Client):
+            return self.api
+        else:
+            raise AttributeError("无法获取API实例")
     async def on_group_at_message_create(self, message:GroupMessage):
         # 注册指令handler
         handlers = [
@@ -505,26 +640,82 @@ class BotClient(botpy.Client):
             addAdminCmd,
             delAdminCmd,
             motd,
+            unblockMotd,
+            blockMotd,
+            unauthQQAvatar,
+            authQQAvatar,
         ]
         for handler in handlers:
-            if await handler(api=self.api, message=message):
+            if await handler(api=self.bot_api, message=message):
                 return
+
+        #处理消息
+        adminRet = await queryIsAdmin(message.group_openid, message.author.member_openid)
+        content = message.content
+
+        match = re.match(r"^\s*\/(\S+)(?:\s+(.*))?$", content)
+        if match:
+            command = match.group(1)
+            params = match.group(2) or ""
+            _log.info(f"cmd:{command+' '+params.strip()}")
+            await customRun(adminRet, self.bot_api, message, command+' '+params.strip())
             
         #无消息
     async def on_message_audit_reject(self, message: MessageAudit):
-        if(message.message_id != None):
+        if message.message_id is not None:
             _log.warning(f"消息：{message.audit_id} 审核未通过.")
+
+    async def on_group_add_robot(self, event: GroupManageEvent):
+        _log.info("机器人被添加到群聊：" + str(event))
+        await self.bot_api.post_group_message(
+            group_openid=event.group_openid,
+            msg_type=0,
+            event_id=event.event_id,
+            content=f"欢迎使用HuHoBot，首次使用请根据文档进行配置，欢迎加入交流群：1005746321",
+        )
+
+    async def on_interaction_create(self, interaction: Interaction):
+        #_log.info(interact
+        pass
+
+
+
+# 协议相关类定义
+class WsBotClient(BaseBotMixin, ymbotpy.Client):
+    """WebSocket模式客户端"""
+    def __init__(self, *args, **kwargs):
+        # 设置需要的权限
+        self.intents = ymbotpy.Intents(
+            public_messages=True,
+            interaction=True,
+            message_audit=True
+        )
+        super().__init__(intents=self.intents or ymbotpy.Intents.none(), *args, **kwargs)
+
+
+class WebhookBotClient(BaseBotMixin, ymbotpy.WebHookClient):
+    """Webhook模式客户端"""
+    pass
     
 # 开启BotPy客户端
-async def startClient(APPID,SECRET,SANDBOX=False):
-    intents = botpy.Intents.none()
-    intents.public_messages=True
-    intents.message_audit=True
-    client = BotClient(
-        intents=intents,
-        is_sandbox=SANDBOX
+async def startClient(APPID:str, SECRET:str, SANDBOX:bool, WEBHOOK:bool):
+    ClientClass = WebhookBotClient if WEBHOOK else WsBotClient
+
+    if WEBHOOK:
+        client = ClientClass(is_sandbox=SANDBOX)
+        await client.start(
+            appid=APPID,
+            secret=SECRET,
+            port=8080,
+            system_log=False
         )
-    await client.start(appid=APPID, secret=SECRET)
+    else:
+        client = ClientClass()
+        await client.start(
+            appid=APPID,
+            secret=SECRET,
+        )
+    return client
 
 # 创建服务器实例的协程
 async def create_server():
@@ -538,9 +729,9 @@ async def start_server():
     await server.connect()
 
 # 主函数，用于启动WebSocket服务器
-async def main(APPID,SECRET,SANDBOX):
+async def main(APPID, SECRET, SANDBOX, WEBHOOK):
     server_coroutine = start_server()  # 获取启动服务器的协程
-    client_coroutine = startClient(APPID,SECRET,SANDBOX)  # 获取启动客户端的协程
+    client_coroutine = startClient(APPID, SECRET, SANDBOX, WEBHOOK)  # 获取启动客户端的协程
     await asyncio.gather(server_coroutine, client_coroutine)  # 并发运行
 
 if __name__ == '__main__':

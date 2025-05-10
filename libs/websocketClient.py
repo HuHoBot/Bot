@@ -1,10 +1,9 @@
 import json
 import websockets
-from botpy import errors
-from botpy import logging, BotAPI
 import uuid
 import asyncio
 from libs.basic import *
+from ymbotpy import logging
 
 logger = logging.get_logger()    #Botpy Logger
 
@@ -36,6 +35,7 @@ class BotClientRecvEvent:
         self.addAdmin = "BotClient.addAdmin"
         self.callbackFunc = "BotClient.callbackFunc"
         self.getConfirmData = "BotClient.getConfirmData"
+        self.chat = "BotClient.chat"
 
 botClientSendEvent = BotClientSendEvent()
 botClientRecvEvent = BotClientRecvEvent()
@@ -106,6 +106,11 @@ class WebsocketClient:
         await self._sendMsg(botClientRecvEvent.getConfirmData,{'serverTempData':serverTempData},id)
         del bindServerTemp[id]
 
+    async def onChat(self, id:str, body:dict):
+        serverId = body.get("serverId","")
+        msg = body.get("msg")
+        await chatManager.postChat(serverId,msg)
+
     async def process_message(self, message):
         json_msg = json.loads(message)
         #print(json_msg)
@@ -133,6 +138,8 @@ class WebsocketClient:
                 await self.onCallbackFunc(uuid_,body)
             elif type_ == botClientRecvEvent.getConfirmData:
                 await self.onGetConfirmData(uuid_,body)
+            elif type_ == botClientRecvEvent.chat:
+                await self.onChat(uuid_,body)
 
     async def _sendShakeHand(self):
         await self._sendMsg(
@@ -160,7 +167,7 @@ class WebsocketClient:
             logger.error(f"等待响应超时: UUID={uuid_}")
             # 超时后清理挂起的请求
             self.pending_requests.pop(uuid_, None)
-            raise
+        return {}
 
     async def send_heartbeat(self):
         while True:
@@ -176,8 +183,13 @@ class WebsocketClient:
         if uuid_ is None:
             uuid_ = str(uuid.uuid4())
         message = json.dumps({"header": {"type": type_, "id": uuid_}, "body": body})
-        await self.ws.send(message)
-        return True
+        try:
+            await self.ws.send(message)
+            return True
+        except Exception as e:
+            logger.error(f"[Websocket] {e}")
+            await self.reconnect()
+            return False
 
     async def reconnect(self):
         logger.info("Attempting to reconnect...")
@@ -187,22 +199,27 @@ class WebsocketClient:
     async def close(self):
         if self.ws is not None:
             await self.ws.close()
-        if self.reconnect_task  is not None:
-            self.reconnect_task.cancel() 
-            self.reconnect_task  = None 
 
     async def sendMsgByServerId(self,
                                 serverId,
                                 type: str,
                                 msg: dict,
                                 unique_id = str(uuid.uuid4())):
-        ret = await self.send_and_wait(botClientSendEvent.sendMsgByServerId,{"serverId":serverId,"type":type,"data":msg},unique_id)
-        return ret['status']
+        try:
+            ret = await self.send_and_wait(botClientSendEvent.sendMsgByServerId,{"serverId":serverId,"type":type,"data":msg},unique_id)
+        except Exception as e:
+            logger.error(f"[Websocket] {e}")
+            return False
+        return ret.get('status', False)
         
 
     async def queryClientList(self,serverIdList):
-        ret = await self.send_and_wait(botClientSendEvent.queryClientList,{"serverIdList":serverIdList})
-        return ret['clientList']
+        try:
+            ret = await self.send_and_wait(botClientSendEvent.queryClientList,{"serverIdList":serverIdList})
+            return ret.get('clientList', [])
+        except Exception as e:
+            logger.error(f"[Websocket] {e}")
+            return []
 
     #添加Callback事件
     def addCallbackFunc(self,id,cbfunc):

@@ -1,3 +1,5 @@
+import logging
+
 import aiosqlite
 import re
 import hashlib
@@ -6,11 +8,19 @@ import random
 import string
 import json
 import requests
+import time
+
+import ymbotpy.errors
+#from botpy import BotAPI
+from ymbotpy import BotAPI
+
 from config import APPID
+from libs.SensitiveFilter import SimpleSensitiveFilter
 
 databasePath = 'data/database.db'
 latestVersion = 'data/latestVersion.json'
-BotName = 'HuHo_Bot'
+BotName = 'HuHoBot'
+_log = logging.getLogger()
 
 bindServerTemp = {}
 
@@ -81,12 +91,12 @@ class Motd:
             return {"online":False}
         statusText= ("\nMC 基岩版服务器状态查询\n"
                     "⭕️状态: 在线\n"
-                    f"📋描述: {self._remove_color_codes(motd_respone.get('motd',''))}\n"
+                    f"📋描述: {self._remove_color_codes(motd_respone.get('motd','').replace('.','_'))}\n"
                     f"📡延迟: {motd_respone.get('delay',-1)} ms\n"
                     f"💳协议版本: {motd_respone.get('agreement',-1)}\n"
                     f"🧰游戏版本: {motd_respone.get('version','0.0.0')}\n"
                     f"👧在线人数: {motd_respone.get('online',-1)}/{motd_respone.get('max',-1)}\n"
-                    f"🚩地图名称: {motd_respone.get('level_name','world')}\n"
+                    f"🚩地图名称: {motd_respone.get('level_name','world').replace('.','·')}\n"
                     f"🎗️默认模式: {motd_respone.get('gamemode','Unknown')}")
         return {'online':True,'text':statusText,'imgUrl':url_getBedrockStatusImg+self.url}
     
@@ -96,7 +106,7 @@ class Motd:
             return {"online":False}
         statusText= ("\nMC Java服务器状态查询\n"
                     "⭕️状态:在线\n"
-                    f"📋描述: {self._remove_color_codes(motd_respone.get('motd',''))}\n"
+                    f"📋描述: {self._remove_color_codes(motd_respone.get('motd','').replace('.','_'))}\n"
                     f"💳协议版本: {motd_respone.get('agreement',-1)}\n"
                     f"🧰游戏版本: {motd_respone.get('version','0.0.0')}\n"
                     f"📡延迟: {motd_respone.get('delay',-1)} ms\n"
@@ -119,6 +129,76 @@ class Motd:
                 return motd_data
 
         return {"online": False}
+
+class Chat:
+    def __init__(self):
+        self.chatTemplate = {}
+        self.groupId = {}
+        self.botApi = None
+
+    def saveTemp(self,serverId:str,groupId:str,msgId:str,currentSeq=1):
+        if serverId not in self.chatTemplate:
+            self.chatTemplate[serverId] = {}
+
+        if groupId not in self.chatTemplate[serverId]:
+            self.chatTemplate[serverId][groupId] = []
+
+        self.chatTemplate[serverId][groupId].append({
+            "msg_id": msgId,
+            "last_time": time.time(),
+            "expire_at": time.time() + 5 * 60,  # 5分钟有效期
+            "current_seq": currentSeq
+        })
+        return True
+
+    async def postChat(self, serverId: str, msg: str):
+        if serverId not in self.chatTemplate or not self.botApi:
+            return False
+
+        sent = False
+        for groupId, msgId_pool in self.chatTemplate[serverId].items():
+            if not msgId_pool:
+                continue
+
+            # 按最后使用时间降序排序，优先用最新消息
+            msgId_pool.sort(key=lambda x: x['last_time'], reverse=True)
+
+            for msgObj in msgId_pool:
+                # 条件调整为：序列号未满 且 消息未过期（5分钟内）
+                if msgObj['current_seq'] <= 5 and time.time() - msgObj['last_time'] <= 5 * 60:
+                    msgObj['current_seq'] += 1
+                    msgObj['last_time'] = time.time()  # 更新时间戳
+
+                    #过滤文本信息
+                    filter = SimpleSensitiveFilter()
+                    output = filter.replace(msg)
+
+                    try:
+                        await self.botApi.post_group_message(
+                            group_openid=groupId,
+                            content=f'[聊天消息]\n{output}',
+                            msg_id=msgObj['msg_id'],
+                            msg_seq=msgObj['current_seq']
+                        )
+                    except ymbotpy.errors.ServerError  as e:
+                        _log.error(f"发送群消息无效：{e}")
+
+                    sent = True
+                    break  # 每个群组只发最新一条
+
+            # 清理过期消息（统一处理）
+            self.chatTemplate[serverId][groupId] = [
+                obj for obj in msgId_pool
+                if obj['current_seq'] <= 5  # 新增序列号判断
+                   and time.time() - obj['last_time'] <= 5 * 60
+            ]
+
+        return sent
+
+    def postBotApi(self, botApi: BotAPI):
+        self.botApi = botApi
+
+chatManager = Chat()
 
 #切割命令参数
 def splitCommandParams(params: str):
@@ -295,6 +375,106 @@ async def delAdmin(groupId,author):
         await db.close()
     return True
 
+#查询是否屏蔽Motd
+async def queryIsBlockMotd(groupId):
+    db = AsyncSQLite(databasePath)
+    await db.connect()
+    try:
+        rows = await db.fetchall(f"select * from blockMotd where `group`='{groupId}'")
+    finally:
+        await db.close()
+    return len(rows) > 0
+
+#添加屏蔽Motd
+async def addBlockMotd(groupId):
+    db = AsyncSQLite(databasePath)
+    await db.connect()
+    try:
+        await db.execute('INSERT OR REPLACE INTO blockMotd (`group`) VALUES (?)', (groupId,))
+        await db.commit()
+    finally:
+        await db.close()
+    return True
+
+#删除屏蔽Motd
+async def delBlockMotd(groupId):
+    db = AsyncSQLite(databasePath)
+    await db.connect()
+    try:
+        await db.execute(f"DELETE FROM blockMotd WHERE `group` = '{groupId}'")
+        await db.commit()
+    finally:
+        await db.close()
+    return True
+
+#查询绑定QQ
+async def queryBindQQ(groupId:str,openId:str):
+    db = AsyncSQLite(databasePath)
+    await db.connect()
+    try:
+        rows = await db.fetchall(f"select `qq` from bindQQ where `groupId`='{groupId}' AND `openId`='{openId}'")
+    finally:
+        await db.close()
+    if len(rows) > 0:
+        return rows[0][0]
+    return None
+
+#查询是否已绑定QQ
+async def queryIsBindQQ(groupId:str,openId:str):
+    bindQQ = await queryBindQQ(groupId,openId)
+    return bindQQ is not None
+
+#添加绑定QQ
+async def addBindQQ(groupId:str,openId:str,qq:str):
+    db = AsyncSQLite(databasePath)
+    await db.connect()
+    try:
+        await db.execute(
+            'INSERT OR REPLACE INTO bindQQ (groupId, openId, qq) VALUES (?, ?, ?)',
+            (groupId, openId, qq)
+        )
+        await db.commit()
+    except Exception as e:
+        _log.error(f"添加QQ绑定失败: {e}")
+        return False
+    finally:
+        await db.close()
+    return True
+
+#删除绑定QQ
+async def delBindQQById(groupId:str,openId:str):
+    db = AsyncSQLite(databasePath)
+    await db.connect()
+    try:
+        await db.execute(
+            "DELETE FROM bindQQ WHERE groupId = ? AND openId = ?",
+            (groupId, openId)
+        )
+        await db.commit()
+    except Exception as e:
+        _log.error(f"删除QQ绑定失败: {e}")
+        return False
+    finally:
+        await db.close()
+    return True
+
+async def delBindQQByQQ(qq: str):
+    """通过QQ号删除绑定"""
+    db = AsyncSQLite(databasePath)
+    await db.connect()
+    try:
+        await db.execute(
+            "DELETE FROM bindQQ WHERE qq = ?",
+            (qq,)
+        )
+        await db.commit()
+    except Exception as e:
+        _log.error(f"通过QQ删除绑定失败: {e}")
+        return False
+    finally:
+        await db.close()
+    return True
+
 #查询是否是符合数字
 def isNumber(data:str):
     if(data.isdigit() and int(data) >= 0):
@@ -330,6 +510,5 @@ def try_parse_json(input_str: str):
     except json.JSONDecodeError:
         return False, input_str
 
-def getQLogoUrl(OpenID:str):
-    return f"https://q.qlogo.cn/qqapp/{APPID}/{OpenID}/640"
-        
+def getQLogoUrl(OpenID:str,size:int = 640):
+    return f"https://q.qlogo.cn/qqapp/{APPID}/{OpenID}/{size}"
