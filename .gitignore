@@ -11,6 +11,8 @@ help.*
 *template
 .lip/
 *.log.*
+/test/
+sensitive-words/*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
