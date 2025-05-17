@@ -4,6 +4,9 @@ import requests
 import os
 import tempfile
 from libs.basic import *
+from ymbotpy import logging
+
+_log = logging.get_logger()
 
 def download_image(url, timeout=5):
     """下载图片到临时文件"""

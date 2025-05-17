@@ -17,16 +17,18 @@ CONFIG_TEMPLATE = '''"""
 APPID = "{appid}"
 SECRET = "{secret}"
 AUDIT = {audit}
+WSKEY = {wskey}
 '''
 
 def load_config(config_path: str) -> Optional[Dict]:
     """加载配置文件"""
     try:
-        from config import APPID, SECRET, AUDIT
+        from config import APPID, SECRET, AUDIT,WSKEY
         return {
             'APPID': APPID,
             'SECRET': SECRET,
-            'AUDIT': AUDIT
+            'AUDIT': AUDIT,
+            'WSKEY': WSKEY
         }
     except ImportError as e:
         _log.error(f"配置加载失败: {str(e)}")
@@ -35,14 +37,15 @@ def load_config(config_path: str) -> Optional[Dict]:
         _log.error(f"配置文件格式错误: {str(e)}")
         return None
 
-def save_config(config_path: str, appid: str, secret: str, audit: bool):
+def save_config(config_path: str, appid: str, secret: str, audit: bool,  wskey: str):
     """保存配置文件"""
     try:
         with open(config_path, 'w', encoding='utf-8') as f:
             f.write(CONFIG_TEMPLATE.format(
                 appid=appid,
                 secret=secret,
-                audit='True' if audit else 'False'
+                audit='True' if audit else 'False',
+                wskey=wskey
             ))
         _log.info("配置文件已更新")
     except IOError as e:
@@ -58,14 +61,14 @@ def parse_args():
                       help='强制启用沙箱模式')
     return parser.parse_args()
 
-async def run_main(appid: str, secret: str, sandbox: bool, webhook: bool):
+async def run_main(appid: str, secret: str, wskey:str,sandbox: bool, webhook: bool):
     """主运行逻辑"""
     try:
         if webhook:
             _log.info("以Webhook模式启动...")
         else:
             _log.info("以Websocket模式启动...")
-        await BotMain.main(appid, secret, sandbox,webhook)
+        await BotMain.main(appid, secret,wskey, sandbox,webhook)
     except KeyboardInterrupt:
         _log.info("程序已手动终止")
     except Exception as e:
@@ -77,11 +80,12 @@ def interactive_setup(config_path: str):
     print("\n== 首次配置向导 ==")
     appid = input("请输入AppID(机器人ID): ").strip()
     secret = input("请输入AppSecret(机器人密钥): ").strip()
+    wskey = input("请输入WebSocketKey(主控密钥): ").strip()
 
     while True:
         audit = input("机器人是否已通过审核？(y/n): ").lower()
         if audit in ('y', 'n'):
-            save_config(config_path, appid, secret, audit == 'y')
+            save_config(config_path, appid, secret, audit == 'y',  wskey)
             return
         print("请输入 y 或 n")
 
@@ -104,6 +108,7 @@ if __name__ == '__main__':
         asyncio.run(run_main(
             config['APPID'],
             config['SECRET'],
+            config['WSKEY'],
             sandbox,
             args.webhook
         ))

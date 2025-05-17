@@ -30,7 +30,27 @@ class ServerManager:
         return self.wsServer
     
 serverManager = ServerManager()
-    
+
+@Commands("帮助")
+async def getHelp(api: BotAPI, message: GroupMessage, params=None):
+    try:
+        uploadMedia = await api.post_group_file(
+            message.group_openid,
+            1,
+            "https://pic.txssb.cn/commandHelp.jpeg",
+            False
+        )
+        await api.post_group_message(
+            group_openid=message.group_openid,
+            msg_type=7,
+            msg_id=message.id,
+            content=f"HuHoBot 指令列表如图，更多详情请前往文档站查看",
+            media=uploadMedia,
+            msg_seq=1
+        )
+    except:
+        await message.reply(content=f"HuHoBot 指令列表图片发送失败，请前往文档站查看")
+    return True
 
 @Commands("添加白名单")
 async def addAllowList(api: BotAPI, message: GroupMessage, params=None):
@@ -149,6 +169,17 @@ async def adminHelp(api: BotAPI, message: GroupMessage, params=None):
 
 @Commands("查信息")
 async def queryInfo(api: BotAPI, message: GroupMessage, params=None):
+    if params:
+        adminRet = await queryIsAdmin(message.group_openid, message.author.member_openid)
+        if (not adminRet):
+            await message.reply(content="你没有足够的权限.")
+            return True
+        ret = await queryBindQQ(message.group_openid, params)
+        if ret:
+            await message.reply(content=f"此用户已绑定QQ:{ret}")
+        else:
+            await message.reply(content=f"此用户未绑定QQ")
+        return True
     await message.reply(content=f"你的OpenId:{message.author.member_openid}\n群的OpenId:{message.group_openid}")
     return True
 
@@ -205,7 +236,7 @@ async def sendGameMsg(api: BotAPI, message: GroupMessage, params=None):
         "author":message.author.member_openid,
     })
     if nick is None:
-        await message.reply(content="没有找到你的昵称数据，请使用/设置名称 {昵称}来设置")
+        await message.reply(content="没有找到你的昵称数据，请使用/设置名称 <昵称>来设置")
     else:
         ret = await queryBindServerByGroup(message.group_openid)
         if(ret is None):
@@ -307,14 +338,18 @@ async def queryOnline(api: BotAPI, message: GroupMessage, params=None):
                 preTip = ""
                 if ("easecation" in url) or ("hypixel" in url):
                     preTip = "(若发现查询出来的图片不是本服务器，请先修改config中的motd字段，或修改post_img使其不推送图片)\n"
-                uploadMedia = await api.post_group_file(message.group_openid,1,data['imgUrl'],False)
-                await api.post_group_message(
-                    group_openid=message.group_openid,
-                    msg_type=7,
-                    msg_id=message.id,
-                    content=f'{preTip}{rpMsg}',
-                    media=uploadMedia
-                )
+                try:
+                    uploadMedia = await api.post_group_file(message.group_openid,1,data['imgUrl'],False)
+                    await api.post_group_message(
+                        group_openid=message.group_openid,
+                        msg_type=7,
+                        msg_id=message.id,
+                        content=f'{preTip}{rpMsg}',
+                        media=uploadMedia
+                    )
+                except:
+                    await message.reply(content=f'(图片上传失败)\n{preTip}{rpMsg}',)
+
             else:
                 await message.reply(content=f'{rpMsg}')
             return
@@ -332,14 +367,17 @@ async def queryOnline(api: BotAPI, message: GroupMessage, params=None):
                 preTip = "(若发现查询出来的图片不是本服务器，请先修改config中的motdUrl字段)\n"
 
             if url != "" and is_valid_domain_port(url):
-                uploadMedia = await api.post_group_file(message.group_openid,1,reqUrl,False)
-                await api.post_group_message(
-                    group_openid=message.group_openid,
-                    msg_type=7,
-                    msg_id=message.id,
-                    content=f'{preTip}在线玩家列表:\n{rpMsg}',
-                    media=uploadMedia
-                )
+                try:
+                    uploadMedia = await api.post_group_file(message.group_openid,1,reqUrl,False)
+                    await api.post_group_message(
+                        group_openid=message.group_openid,
+                        msg_type=7,
+                        msg_id=message.id,
+                        content=f'{preTip}在线玩家列表:\n{rpMsg}',
+                        media=uploadMedia
+                    )
+                except:
+                    await message.reply(content=f'(图片上传失败)\n{preTip}在线玩家列表:\n{rpMsg}',)
             else:
                 await message.reply(content=f"{preTip}在线玩家列表:\n{rpMsg}")
 
@@ -453,8 +491,6 @@ async def runCommand(api: BotAPI, message: GroupMessage, params=None):
     await customRun(False,api,message,params)
     return True
 
-
-
 @Commands("motd")
 async def motd(api: BotAPI, message: GroupMessage, params=None):
     adminRet = await queryIsAdmin(message.group_openid, message.author.member_openid)
@@ -489,6 +525,11 @@ async def motd(api: BotAPI, message: GroupMessage, params=None):
                 '2.描述(motd)中含有链接，官方机器人不允许发送没有授权的链接\n'
                 '3.指定的平台错误(je,be,auto)(不填默认auto)\n'
                 '4.ip或端口输入错误，或者接口维护这个可以问问机器人主人😝')
+    offLineFailedText = ('❌无法获取服务器状态信息。\n'
+                  '⚠️状态检测为Offline：\n'
+                  '1.服务器没有开启或已经关闭或不允许获取motd\n'
+                  '2.指定的平台错误(je,be,auto)(不填默认auto)\n'
+                  '3.ip或端口输入错误，或者接口维护这个可以问问机器人主人😝')
     
     if motdData.get('online'):
         try:
@@ -505,7 +546,8 @@ async def motd(api: BotAPI, message: GroupMessage, params=None):
             await message.reply(content=failedText)
 
     else:
-        await message.reply(content=failedText)
+        await message.reply(content=offLineFailedText)
+    return True
 
 @Commands("unblockMotd")
 async def unblockMotd(api: BotAPI, message: GroupMessage, params=None):
@@ -623,6 +665,7 @@ class BaseBotMixin:
     async def on_group_at_message_create(self, message:GroupMessage):
         # 注册指令handler
         handlers = [
+            getHelp,
             addAllowList,
             bind,
             reCall,
@@ -666,12 +709,12 @@ class BaseBotMixin:
             _log.warning(f"消息：{message.audit_id} 审核未通过.")
 
     async def on_group_add_robot(self, event: GroupManageEvent):
-        _log.info("机器人被添加到群聊：" + str(event))
+        _log.info("机器人被添加到群聊：" + event.group_openid)
         await self.bot_api.post_group_message(
             group_openid=event.group_openid,
             msg_type=0,
             event_id=event.event_id,
-            content=f"欢迎使用HuHoBot，首次使用请根据文档进行配置，欢迎加入交流群：1005746321",
+            content=f"欢迎使用HuHoBot，首次使用请根据文档进行配置\n操作过程中需要@我，如:@HuHoBot /绑定 xxx\n欢迎加入交流群：1005746321",
         )
 
     async def on_interaction_create(self, interaction: Interaction):
@@ -708,9 +751,10 @@ async def startClient(APPID:str, SECRET:str, SANDBOX:bool, WEBHOOK:bool):
             secret=SECRET,
             port=8080,
             system_log=False
+
         )
     else:
-        client = ClientClass()
+        client = ClientClass(is_sandbox=SANDBOX)
         await client.start(
             appid=APPID,
             secret=SECRET,
@@ -718,19 +762,19 @@ async def startClient(APPID:str, SECRET:str, SANDBOX:bool, WEBHOOK:bool):
     return client
 
 # 创建服务器实例的协程
-async def create_server():
-    server_instance = WebsocketClient("HuHoBot",'ws://127.0.0.1:8888')
+async def create_server(wskey: str):
+    server_instance = WebsocketClient("HuHoBot",'ws://127.0.0.1:8888',wskey)
     serverManager.setWsServer(server_instance)
     return server_instance
 
 # 启动WebSocket服务器的函数
-async def start_server():
-    server = await create_server()  # 获取服务器实例
+async def start_server(wskey: str):
+    server = await create_server(wskey)  # 获取服务器实例
     await server.connect()
 
 # 主函数，用于启动WebSocket服务器
-async def main(APPID, SECRET, SANDBOX, WEBHOOK):
-    server_coroutine = start_server()  # 获取启动服务器的协程
+async def main(APPID, SECRET, WSKEY, SANDBOX, WEBHOOK):
+    server_coroutine = start_server(WSKEY)  # 获取启动服务器的协程
     client_coroutine = startClient(APPID, SECRET, SANDBOX, WEBHOOK)  # 获取启动客户端的协程
     await asyncio.gather(server_coroutine, client_coroutine)  # 并发运行
 

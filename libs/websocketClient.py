@@ -42,9 +42,10 @@ botClientRecvEvent = BotClientRecvEvent()
 
 # 定义WebSocket客户端类
 class WebsocketClient:
-    def __init__(self, name, uri):
+    def __init__(self, name, uri,wsKey):
         self.name = name
         self.uri = uri
+        self.wsKey = wsKey
         self.ws = None
         self.pending_requests = {}  # 存储 {uuid: Future} 的映射
         self.callback = {}
@@ -146,7 +147,7 @@ class WebsocketClient:
             "shakeHand",
             {
                 "serverId": "BotClient",
-                "hashKey": "BotClient",
+                "hashKey": self.wsKey,
                 "name": "HuHoBot",
             }
         )
